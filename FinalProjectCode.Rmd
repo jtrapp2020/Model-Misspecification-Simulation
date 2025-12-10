@@ -1,0 +1,239 @@
+---
+title: "Model Misspecification Simulation"
+author: "JT Rapp"
+date: "December 10, 2025"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+#Library
+library(tidyverse)
+library(sandwich)
+library(flextable)
+```
+
+```{r}
+#Chunk Dedicated to reading in Data
+#Read in Data sets from project folder
+x_data_n20 <- read.csv("x_n20-1.csv")
+x_data_n200 <- read.csv("x_n200.csv")
+
+#Extract data sets as vectors
+x_n20 <- x_data_n20$x
+x_n200 <- x_data_n200$x
+```
+
+```{r}
+#Chunk dedicated to Simulation Function
+# Function to run the simulation for a specific scenario
+run_simulation <- function(n_size, lambda_true, iterations = 2000) {
+  # Select the correct predictor variable based on sample size (N)
+  if (n_size == 20) {
+    x <- x_n20
+  } else if (n_size == 200) {
+    x <- x_n200
+  } else {
+    stop("Sample size must be 20 or 200.")
+  }
+  #Results Storage data frame
+  results <- data.frame(
+    iter = 1:iterations,
+    bias_pois = numeric(iterations),
+    bias_norm = numeric(iterations),
+    beta_pois = numeric(iterations),
+    beta_norm = numeric(iterations),
+    var_naive_pois = numeric(iterations),
+    var_naive_norm = numeric(iterations),
+    var_robust_pois = numeric(iterations),
+    var_robust_norm = numeric(iterations)
+  )
+  #Set Up Design Matrix and Set Seed
+  new_data <- data.frame(intercept = 1, x = x)
+  set.seed(49)
+  for (i in 1:iterations) {
+    #Simulate Data
+    #Generating y from Poisson distribution with true lambda
+    y <- rpois(n_size, lambda_true)
+    dat <- data.frame(y = y, x = x)
+    #Fit Models
+    fit_pois <- glm(y ~ x, family = poisson, data = dat)
+    fit_norm <- glm(y ~ x, family = gaussian, data = dat)
+    #Calculate Bias
+    pred_pois <- predict(fit_pois, newdata = new_data, type = "response")
+    pred_norm <- predict(fit_norm, newdata = new_data, type = "response")
+    results$bias_pois[i] <- mean(pred_pois) - lambda_true
+    results$bias_norm[i] <- mean(pred_norm) - lambda_true
+    #Store Betas
+    results$beta_pois[i] <- coef(fit_pois)[2]
+    results$beta_norm[i] <- coef(fit_norm)[2]
+    #Calculate Variances
+    results$var_naive_pois[i] <- vcov(fit_pois)[2, 2]
+    results$var_naive_norm[i] <- vcov(fit_norm)[2, 2]
+    results$var_robust_pois[i] <- sandwich(fit_pois)[2, 2]
+    results$var_robust_norm[i] <- sandwich(fit_norm)[2, 2]
+  }
+  #Add scenario labels for aggregation
+  results$N <- n_size
+  results$True_Lambda <- lambda_true
+
+  return(results)
+}
+```
+
+```{r}
+#Chunk Dedicated to Running Simulations - should take about a minute
+#Scenario 1: N=20, Lambda=4
+sim1 <- run_simulation(n_size = 20, lambda_true = 4)
+
+#Scenario 2: N=20, Lambda=10
+sim2 <- run_simulation(n_size = 20, lambda_true = 10)
+
+#Scenario 3: N=200, Lambda=4
+sim3 <- run_simulation(n_size = 200, lambda_true = 4)
+
+#Scenario 4: N=200, Lambda=10
+sim4 <- run_simulation(n_size = 200, lambda_true = 10)
+
+#Combine all results into one data frame
+all_sims <- rbind(sim1, sim2, sim3, sim4)
+```
+
+## Introduction
+
+Model misspecification occurs when a chosen statistical model fails to align with the true data-generating process. This could impact our inferences, leading to inaccurate standard errors, unreliable confidence intervals, and potential bias in parameter estimates. In this simulation study, we test the impact of model misspecification on generalized linear models. Using outcomes from a Poisson distribution, we examine regression results under a correctly specified Poisson model and a misspecified Normal model to evaluate their performance.
+
+Our primary goals are to assess bias in the estimated mean parameter lambda and to compare naive versus robust variance estimators for the slope coefficient beta. By conducting multiple simulations that vary in sample size (20 vs. 200) and mean (4 vs. 10), we investigate how model choice and variance estimation influence inferential accuracy, and under what conditions naive standard errors become unreliable.
+
+## Results
+
+For our simulation, we evaluated the performance of our Poisson and Normal models for sample sizes of 20 and 200. Additionally, we compared the models with lambda set to 4 and 10. Each combination was simulated 2000 times. First, we will assess model bias by comparing our estimated mean parameter to the true lambda parameter. As shown in Table 1, both the correctly specified Poisson model and the misspecified Normal model produce nearly identical bias estimates. Regardless of the model, the bias decreased significantly as the sample size jumped from 20 to 200.
+
+```{r}
+#Summarize Bias
+bias_summary <- all_sims %>%
+  group_by(N, True_Lambda) %>%
+  summarise(
+    Avg_Bias_Poisson = mean(bias_pois),
+    Avg_Bias_Normal = mean(bias_norm)
+  ) %>%
+  ungroup()
+
+#Create formatted table
+flextable(bias_summary) %>%
+  set_caption("Table 1: Mean Bias of Lambda Hat by Scenario") %>%
+  #Rename headers
+  set_header_labels(
+    N = "Sample Size (N)",
+    True_Lambda = "True Lambda",
+    Avg_Bias_Poisson = "Avg. Bias (Poisson)",
+    Avg_Bias_Normal = "Avg. Bias (Normal)"
+  ) %>%
+  # Rounding: N and Lambda to 1 decimal
+  colformat_double(j = c("N", "True_Lambda"), digits = 0) %>%
+  # Rounding: Bias columns to 3 decimals
+  colformat_double(j = c("Avg_Bias_Poisson", "Avg_Bias_Normal"), digits = 4) %>%
+  autofit() %>%
+  theme_vanilla() %>%
+  bg(bg = "#EFEFEF", part = "header") %>%
+  align(align = "center", part = "all")
+```
+
+\newpage
+
+Next, we compare the variance of our beta coefficient across our simulation. As stated previously, we will look at naive and robust variance calculations. Unlike the bias estimate, variances differed depending on the model chosen. The misspecified normal model had significantly larger variances than the correctly specified Poisson model. When looking at the difference between naive and robust variances, there was not a large difference for the Poisson model. However, the robust variance estimate was noticeably better for small sample sizes.
+
+```{r}
+#Chunk dedicated to Variances Flex table
+#Summarize Variances
+var_summary <- all_sims %>%
+  group_by(N, True_Lambda) %>%
+  summarise(
+    Avg_Naive_Var_Pois = mean(var_naive_pois),
+    Avg_Robust_Var_Pois = mean(var_robust_pois),
+    Avg_Naive_Var_Norm = mean(var_naive_norm),
+    Avg_Robust_Var_Norm = mean(var_robust_norm)
+  ) %>%
+  ungroup()
+
+#Create Flex table
+ft <- flextable(var_summary) %>%
+  set_caption(
+    "Table 2:
+    Comparison of Naïve and Robust Variances under Model Misspecification"
+  ) %>%
+  set_header_labels(
+    N = "N",
+    True_Lambda = "Lambda",
+    Avg_Naive_Var_Pois = "Pois (Naive)",
+    Avg_Robust_Var_Pois = "Pois (Robust)",
+    Avg_Naive_Var_Norm = "Norm (Naive)",
+    Avg_Robust_Var_Norm = "Norm (Robust)"
+  ) %>%
+  colformat_double(j = c("N", "True_Lambda"), digits = 0) %>%
+  colformat_double(j = c("Avg_Naive_Var_Pois", "Avg_Robust_Var_Pois",
+                         "Avg_Naive_Var_Norm",
+                         "Avg_Robust_Var_Norm"), digits = 3) %>%
+  theme_vanilla() %>%
+  autofit() %>%
+  fontsize(size = 10, part = "all") %>%
+  bg(bg = "#EFEFEF", part = "header") %>%
+  align(align = "center", part = "all")
+
+ft
+```
+
+Finally, we added a plot showing 95% confidence intervals for the beta coefficients using both the naive and robust variances. For simplicity, a normal distribution was used to calculate the confidence intervals.
+
+```{r plot_ci, fig.height=5, fig.width=6.5}
+#Summarize and Reshape Data
+plot_data <- all_sims %>%
+  group_by(N, True_Lambda) %>%
+  summarise(
+    Mean_Beta_Pois = mean(beta_pois),
+    SE_Naive_Pois = mean(sqrt(var_naive_pois)), 
+    SE_Robust_Pois = mean(sqrt(var_robust_pois)),
+    Mean_Beta_Norm = mean(beta_norm),
+    SE_Naive_Norm = mean(sqrt(var_naive_norm)),
+    SE_Robust_Norm = mean(sqrt(var_robust_norm))
+  ) %>%
+  pivot_longer(cols = starts_with("Mean"), names_to = "Model", values_to = "Beta") %>%
+  mutate(Model = ifelse(grepl("Pois", Model), "Poisson", "Normal"))
+
+plot_data$SE_Naive <- ifelse(plot_data$Model == "Poisson", plot_data$SE_Naive_Pois, plot_data$SE_Naive_Norm)
+plot_data$SE_Robust <- ifelse(plot_data$Model == "Poisson", plot_data$SE_Robust_Pois, plot_data$SE_Robust_Norm)
+
+plot_data_final <- plot_data %>%
+  pivot_longer(cols = c("SE_Naive", "SE_Robust"), names_to = "Variance_Type", values_to = "SE") %>%
+  mutate(
+    Variance_Type = ifelse(Variance_Type == "SE_Naive", "Naive", "Robust"),
+    LB = Beta - 1.96 * SE, 
+    UB = Beta + 1.96 * SE
+  ) %>%
+  rename(`True Lambda` = True_Lambda)
+
+#Plot
+ggplot(plot_data_final, aes(x = Model, y = Beta, color = Variance_Type)) +
+  geom_point(position = position_dodge(width = 0.5), size = 2.5) +
+  geom_errorbar(aes(ymin = LB, ymax = UB), width = 0.2, position = position_dodge(width = 0.5), size = 0.8) +
+  facet_grid(N ~ `True Lambda`, labeller = label_both) + 
+  labs(
+    title = "95% CIs for Beta Coefficients",
+    y = "Beta Estimate",
+    x = "Distribution"
+  ) +
+  theme_bw(base_size = 11) + 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    panel.grid.minor = element_blank() 
+  )
+```
+
+## Discussion
+In our simulation, we found that misspecification had little to no impact on the bias of the estimated lambda parameter. For each scenario, the simulated bias was essentially the same between models. This result suggests that, despite any misspecification caused by using a normal model, it is still sufficient for estimating an unbiased mean. Additionally, as the sample size increased, the bias subsequently decreased. Therefore, as the sample size increases, the estimated bias will decrease regardless of the model chosen.
+
+While parameter estimates appear to be consistent across models, the variances are not. The misspecified normal model simulated significantly larger variances than the correctly specified Poisson model across each scenario. As a result, we observed larger confidence intervals in our plot. However, as observed in the second table and in our plot, the confidence intervals decreased dramatically as the sample size increased for each model. Therefore, misspecification led to problems in our inference, not our estimation.
+
+Naive and Robust variances varied across models and scenarios. For each model, the Naive and Robust variances decreased as the sample size increased. In the Poisson simulation, the robust variance was only marginally smaller than the naive variance for the sample size of 20. However, the variances were essentially identical for the sample size of 200. Meanwhile, the robust variance provided tighter standard errors for the misspecified Normal model when the sample size was small. The robust variance was only marginally better with a sample size of 200 for the normal model. These results suggest that the robust variance is particularly useful when we fail to meet the necessary assumptions for inference. It was especially effective for the misspecified normal model with a small sample size, and only equally as effective as the naive estimate when using the correctly specified Poisson model with a large sample size. However, a robust variance is not enough to fully compensate for a misspecified model, as the largest variance found in the Poisson simulation was still significantly smaller than the smallest variance in the normal simulation.
