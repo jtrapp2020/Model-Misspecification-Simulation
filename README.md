@@ -33,8 +33,6 @@ For each iteration, the following steps were performed:
 * `x_n20-1.csv`*: The input dataset containing the binary predictor variable for the $N=20$ scenario.
 * `x_n200-1.csv`*: The input dataset containing the binary predictor variable for the $N=200$ scenario.
 
-*(Note: Ensure the CSV filenames match exactly what is in your repo)*
-
 ## How to Run
 1.  Clone this repository.
 2.  Open `FinalProject.Rmd` in RStudio.
